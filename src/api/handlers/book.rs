@@ -1840,7 +1840,10 @@ pub async fn search_book_multi_sse(
         .map_err(|_| AppError::BadRequest("NEED_LOGIN".to_string()))?;
     let key = q.key.unwrap_or_default();
     let last_index = q.last_index.unwrap_or(-1);
-    let search_size = q.search_size.unwrap_or(50).max(1) as usize;
+    let search_size = q
+        .search_size
+        .unwrap_or(MAX_SEARCH_RESULTS as i32)
+        .clamp(1, MAX_SEARCH_RESULTS as i32) as usize;
     let concurrent = q.concurrent_count.unwrap_or(24).max(1) as usize;
     let book_source_url =
         q.book_source_url
@@ -1944,14 +1947,8 @@ pub async fn search_book_multi_sse(
                 match res {
                     Ok((cur_idx, _source_name, Ok(list))) => {
                         last_idx = cur_idx;
-                        let mut batch = Vec::new();
-                        for b in list {
-                            let key = format!("{}_{}", b.name, b.author);
-                            if !result_map.contains(&key) {
-                                result_map.insert(key);
-                                batch.push(b);
-                            }
-                        }
+                        let remaining = search_size.saturating_sub(total);
+                        let batch = take_search_sse_batch(list, &mut result_map, remaining);
                         if !batch.is_empty() {
                             total += batch.len();
                             let payload = serde_json::json!({"lastIndex": cur_idx, "data": batch});
@@ -1981,6 +1978,23 @@ pub async fn search_book_multi_sse(
     });
 
     Ok(Sse::new(ReceiverStream::new(rx).map(Ok)))
+}
+
+fn take_search_sse_batch(
+    books: Vec<SearchBook>,
+    seen: &mut std::collections::HashSet<String>,
+    remaining: usize,
+) -> Vec<SearchBook> {
+    let mut batch = Vec::new();
+    for book in books {
+        if batch.len() >= remaining {
+            break;
+        }
+        if seen.insert(book.merge_key()) {
+            batch.push(book);
+        }
+    }
+    batch
 }
 
 pub async fn search_book_source_sse(
@@ -3003,7 +3017,7 @@ mod tests {
         book_matches_delete_target, build_available_book_source_response,
         cache_count_for_shelf_display, fallback_available_book, local_book_limit_exceeded,
         merge_search_results, should_use_available_source_cache, take_available_source_cached_matches,
-        take_available_source_sse_matches, GetAvailableBookSourceRequest,
+        take_available_source_sse_matches, take_search_sse_batch, GetAvailableBookSourceRequest,
     };
     use crate::model::{book::Book, search::SearchBook};
     use std::collections::HashSet;
@@ -3042,6 +3056,35 @@ mod tests {
             &vec!["one".to_string(), "two".to_string()]
         );
         assert_eq!(results[1].name, "三体全集");
+    }
+
+    #[test]
+    fn search_sse_batch_deduplicates_normalized_books_and_respects_remaining_limit() {
+        let mut seen = HashSet::new();
+        let batch = take_search_sse_batch(
+            vec![
+                SearchBook {
+                    name: "三 体".into(),
+                    author: "刘慈欣".into(),
+                    ..Default::default()
+                },
+                SearchBook {
+                    name: "《三体》".into(),
+                    author: "作者：刘慈欣".into(),
+                    ..Default::default()
+                },
+                SearchBook {
+                    name: "三体全集".into(),
+                    author: "刘慈欣".into(),
+                    ..Default::default()
+                },
+            ],
+            &mut seen,
+            1,
+        );
+
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].name, "三 体");
     }
 
     #[test]
