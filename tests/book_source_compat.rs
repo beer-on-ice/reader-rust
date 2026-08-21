@@ -319,7 +319,7 @@ async fn search_page(headers: HeaderMap) -> Html<&'static str> {
         == Some("ok")
     {
         Html(
-            r#"<div class="item"><a class="title" href="/book/1">Raw</a><span class="author">Tester</span></div>"#,
+            r#"<div class="item"><a class="title" href="/book/1">Raw 斗破</a><span class="author">Tester</span></div>"#,
         )
     } else {
         Html("")
@@ -372,7 +372,7 @@ async fn search_pipeline_uses_url_analyzer_final_url_and_login_check_js() {
     let _ = tokio::fs::remove_dir_all(&storage_dir).await;
 
     assert_eq!(books.len(), 1);
-    assert_eq!(books[0].name, "Checked");
+    assert_eq!(books[0].name, "Checked 斗破");
     assert_eq!(books[0].book_url, format!("http://{}/book/1", addr));
 }
 
