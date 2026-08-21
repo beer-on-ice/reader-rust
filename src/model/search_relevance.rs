@@ -87,16 +87,10 @@ fn relevance_score(query: &str, book: &SearchBook) -> u8 {
 fn is_short_query(query: &str) -> bool {
     let length = query.chars().count();
     length < 2
-        || (query.is_ascii()
-            && query.chars().all(|ch| ch.is_ascii_alphanumeric())
-            && length < 3)
+        || (query.is_ascii() && query.chars().all(|ch| ch.is_ascii_alphanumeric()) && length < 3)
 }
 
-pub fn rank_search_results(
-    query: &str,
-    books: Vec<SearchBook>,
-    limit: usize,
-) -> Vec<SearchBook> {
+pub fn rank_search_results(query: &str, books: Vec<SearchBook>, limit: usize) -> Vec<SearchBook> {
     let query = normalize_search_text(query);
     if query.is_empty() || limit == 0 {
         return Vec::new();

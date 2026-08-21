@@ -331,11 +331,7 @@ pub async fn search_book_multi(
 }
 
 /// Merge search results from different book sources for the same book
-fn merge_search_results(
-    results: Vec<SearchBook>,
-    query: &str,
-    limit: usize,
-) -> Vec<SearchBook> {
+fn merge_search_results(results: Vec<SearchBook>, query: &str, limit: usize) -> Vec<SearchBook> {
     use std::collections::HashMap;
 
     let mut indexes: HashMap<String, usize> = HashMap::new();
@@ -3016,8 +3012,9 @@ mod tests {
     use super::{
         book_matches_delete_target, build_available_book_source_response,
         cache_count_for_shelf_display, fallback_available_book, local_book_limit_exceeded,
-        merge_search_results, should_use_available_source_cache, take_available_source_cached_matches,
-        take_available_source_sse_matches, take_search_sse_batch, GetAvailableBookSourceRequest,
+        merge_search_results, should_use_available_source_cache,
+        take_available_source_cached_matches, take_available_source_sse_matches,
+        take_search_sse_batch, GetAvailableBookSourceRequest,
     };
     use crate::model::{book::Book, search::SearchBook};
     use std::collections::HashSet;
