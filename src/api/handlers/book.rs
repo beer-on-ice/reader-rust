@@ -1,7 +1,12 @@
 use crate::api::auth::AuthContext;
 use crate::api::AppState;
 use crate::error::error::{ApiResponse, AppError};
-use crate::model::{book::Book, book_source::BookSource, search::SearchBook};
+use crate::model::{
+    book::Book,
+    book_source::BookSource,
+    search::SearchBook,
+    search_relevance::{rank_search_results, MAX_SEARCH_RESULTS},
+};
 use crate::service::local_epub_book::{
     is_local_epub_origin, is_local_epub_url, LOCAL_EPUB_ORIGIN, MAX_EPUB_UPLOAD_BYTES,
 };
@@ -318,7 +323,7 @@ pub async fn search_book_multi(
     }
 
     // Merge books with same name and author
-    let merged = merge_search_results(results);
+    let merged = merge_search_results(results, &key, MAX_SEARCH_RESULTS);
 
     Ok(Json(ApiResponse::ok(
         serde_json::to_value(merged).unwrap_or_default(),
@@ -327,52 +332,51 @@ pub async fn search_book_multi(
 
 /// Merge search results from different book sources for the same book
 fn merge_search_results(
-    results: Vec<crate::model::search::SearchBook>,
-) -> Vec<crate::model::search::SearchBook> {
-    use crate::model::search::SearchBook;
+    results: Vec<SearchBook>,
+    query: &str,
+    limit: usize,
+) -> Vec<SearchBook> {
     use std::collections::HashMap;
 
-    let mut merged: HashMap<String, SearchBook> = HashMap::new();
+    let mut indexes: HashMap<String, usize> = HashMap::new();
+    let mut merged: Vec<SearchBook> = Vec::new();
 
     for book in results {
-        let key = book.merge_key();
+        let merge_key = book.merge_key();
 
-        if let Some(existing) = merged.get_mut(&key) {
+        if let Some(&index) = indexes.get(&merge_key) {
+            let existing = &mut merged[index];
             // Add this source to the existing book
-            if let Some(ref mut urls) = existing.book_source_urls {
-                if !urls.contains(&book.origin) {
-                    urls.push(book.origin.clone());
-                }
-            } else {
-                existing.book_source_urls =
-                    Some(vec![existing.origin.clone(), book.origin.clone()]);
+            let urls = existing
+                .book_source_urls
+                .get_or_insert_with(|| vec![existing.origin.clone()]);
+            if !urls.contains(&book.origin) {
+                urls.push(book.origin.clone());
             }
 
             // Fill in missing fields from this source
-            if existing.cover_url.is_none() && book.cover_url.is_some() {
+            if existing.cover_url.is_none() {
                 existing.cover_url = book.cover_url;
             }
-            if existing.intro.is_none() && book.intro.is_some() {
+            if existing.intro.is_none() {
                 existing.intro = book.intro;
             }
-            if existing.kind.is_none() && book.kind.is_some() {
+            if existing.kind.is_none() {
                 existing.kind = book.kind;
             }
-            if existing.last_chapter.is_none() && book.last_chapter.is_some() {
+            if existing.last_chapter.is_none() {
                 existing.last_chapter = book.last_chapter;
             }
-            if existing.update_time.is_none() && book.update_time.is_some() {
+            if existing.update_time.is_none() {
                 existing.update_time = book.update_time;
             }
         } else {
-            merged.insert(key, book);
+            indexes.insert(merge_key, merged.len());
+            merged.push(book);
         }
     }
 
-    let mut result: Vec<SearchBook> = merged.into_values().collect();
-    // Sort by name for consistent ordering
-    result.sort_by(|a, b| a.name.cmp(&b.name));
-    result
+    rank_search_results(query, merged, limit)
 }
 
 pub async fn explore_book(
@@ -2998,11 +3002,47 @@ mod tests {
     use super::{
         book_matches_delete_target, build_available_book_source_response,
         cache_count_for_shelf_display, fallback_available_book, local_book_limit_exceeded,
-        should_use_available_source_cache, take_available_source_cached_matches,
+        merge_search_results, should_use_available_source_cache, take_available_source_cached_matches,
         take_available_source_sse_matches, GetAvailableBookSourceRequest,
     };
     use crate::model::{book::Book, search::SearchBook};
     use std::collections::HashSet;
+
+    #[test]
+    fn search_merge_normalizes_duplicates_and_preserves_relevance_order() {
+        let results = merge_search_results(
+            vec![
+                SearchBook {
+                    name: "三 体".into(),
+                    author: "作者：刘慈欣".into(),
+                    origin: "one".into(),
+                    ..Default::default()
+                },
+                SearchBook {
+                    name: "《三体》".into(),
+                    author: "刘慈欣".into(),
+                    origin: "two".into(),
+                    ..Default::default()
+                },
+                SearchBook {
+                    name: "三体全集".into(),
+                    author: "刘慈欣".into(),
+                    origin: "three".into(),
+                    ..Default::default()
+                },
+            ],
+            "三体",
+            50,
+        );
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].name, "三 体");
+        assert_eq!(
+            results[0].book_source_urls.as_ref().unwrap(),
+            &vec!["one".to_string(), "two".to_string()]
+        );
+        assert_eq!(results[1].name, "三体全集");
+    }
 
     #[test]
     fn delete_target_matches_by_book_url() {
