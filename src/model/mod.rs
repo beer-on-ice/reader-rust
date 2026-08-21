@@ -10,4 +10,5 @@ pub mod replace_rule;
 pub mod rss;
 pub mod rule;
 pub mod search;
+pub mod search_relevance;
 pub mod user;
