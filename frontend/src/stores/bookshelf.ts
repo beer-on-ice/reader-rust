@@ -29,6 +29,15 @@ function searchResultKey(book: SearchBook) {
   return `${title}\u0000${author}`
 }
 
+function isSearchBook(value: unknown): value is SearchBook {
+  if (!value || typeof value !== 'object') return false
+  const book = value as Record<string, unknown>
+  return typeof book.name === 'string'
+    && typeof book.author === 'string'
+    && typeof book.bookUrl === 'string'
+    && typeof book.origin === 'string'
+}
+
 export const useBookshelfStore = defineStore('bookshelf', () => {
   // ─── Bookshelf ───
   const books = ref<Book[]>([])
@@ -172,6 +181,7 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
   const searchHasMore = ref(true)
   const searchInitialized = ref(false)
   const searchScrollTop = ref(0)
+  const searchSessionId = ref(0)
 
   function currentSearchSignature() {
     return JSON.stringify([
@@ -212,26 +222,41 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     searchHasMore.value = true
     searchInitialized.value = true
     searchScrollTop.value = 0
+    searchSessionId.value += 1
     return true
   }
 
-  function appendSearchResults(books: SearchBook[]) {
+  function appendSearchResults(books: unknown, sessionId = searchSessionId.value) {
+    if (sessionId !== searchSessionId.value || !Array.isArray(books)) return 0
     const seen = new Set(searchResults.value.map(searchResultKey))
     const next = searchResults.value.slice()
+    let appended = 0
     for (const book of books) {
+      if (!isSearchBook(book)) continue
       const key = searchResultKey(book)
       if (!seen.has(key)) {
         seen.add(key)
         next.push(book)
+        appended += 1
       }
     }
     searchResults.value = next
+    return appended
   }
 
-  function completeSearchPage(lastIndex: number, hasMore: boolean) {
-    searchLastIndex.value = Math.max(searchLastIndex.value, lastIndex)
-    searchHasMore.value = hasMore
+  function completeSearchPage(
+    lastIndex: unknown,
+    hasMore: unknown,
+    sessionId = searchSessionId.value,
+  ) {
+    if (sessionId !== searchSessionId.value) return false
     isSearching.value = false
+    if (typeof lastIndex !== 'number' || !Number.isFinite(lastIndex)) return false
+    if (typeof hasMore !== 'boolean') return false
+    const normalizedLastIndex = Math.max(-1, Math.trunc(lastIndex))
+    searchLastIndex.value = Math.max(searchLastIndex.value, normalizedLastIndex)
+    searchHasMore.value = hasMore
+    return true
   }
 
   function canLoadMoreSearch() {
@@ -242,7 +267,7 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
   }
 
   function saveSearchScroll(scrollTop: number) {
-    searchScrollTop.value = Math.max(0, scrollTop)
+    searchScrollTop.value = Number.isFinite(scrollTop) ? Math.max(0, scrollTop) : 0
   }
 
   function clearSearch() {
@@ -257,6 +282,7 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     searchHasMore.value = true
     searchInitialized.value = false
     searchScrollTop.value = 0
+    searchSessionId.value += 1
   }
 
   const isSearchMode = computed(() => searchKey.value.length > 0)
@@ -358,7 +384,7 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     fetchGroups, saveGroup, removeGroup,
     searchResults, isSearching, searchKey,
     searchScope, searchGroup, searchSourceUrl, searchSessionSignature,
-    searchLastIndex, searchHasMore, searchInitialized, searchScrollTop,
+    searchLastIndex, searchHasMore, searchInitialized, searchScrollTop, searchSessionId,
     startSearch, prepareSearchSession, appendSearchResults, completeSearchPage,
     canLoadMoreSearch, saveSearchScroll, clearSearch, isSearchMode,
     editMode,
