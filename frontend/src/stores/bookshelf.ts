@@ -15,6 +15,20 @@ import { deleteBrowserBookCache, listBrowserCacheSummary } from '../utils/browse
 import { isLocalBook } from '../utils/localBook'
 import { clearRecentReadBooks, getRecentReadBookKey, loadRecentReadBooks, removeRecentReadBook } from '../utils/recentBooks'
 
+const SEARCH_SEPARATORS = new Set('《》〈〉「」『』()（）[]【】·-—_:：,，.。!！?？;；\'"“”‘’/\\|')
+
+function normalizeSearchText(value: string) {
+  return Array.from(value.toLowerCase())
+    .filter((char) => !/\s/u.test(char) && !SEARCH_SEPARATORS.has(char))
+    .join('')
+}
+
+function searchResultKey(book: SearchBook) {
+  const title = normalizeSearchText(book.name)
+  const author = normalizeSearchText(book.author).replace(/^作者/, '')
+  return `${title}\u0000${author}`
+}
+
 export const useBookshelfStore = defineStore('bookshelf', () => {
   // ─── Bookshelf ───
   const books = ref<Book[]>([])
@@ -153,6 +167,20 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
   const searchScope = ref<'all' | 'group' | 'source'>('source')
   const searchGroup = ref('')
   const searchSourceUrl = ref('')
+  const searchSessionSignature = ref('')
+  const searchLastIndex = ref(-1)
+  const searchHasMore = ref(true)
+  const searchInitialized = ref(false)
+  const searchScrollTop = ref(0)
+
+  function currentSearchSignature() {
+    return JSON.stringify([
+      searchKey.value.trim(),
+      searchScope.value,
+      searchScope.value === 'group' ? searchGroup.value : '',
+      searchScope.value === 'source' ? searchSourceUrl.value : '',
+    ])
+  }
 
   function startSearch(key: string, options: {
     scope?: 'all' | 'group' | 'source'
@@ -171,6 +199,52 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     searchKey.value = nextKey
   }
 
+  function prepareSearchSession() {
+    const signature = currentSearchSignature()
+    if (searchInitialized.value && searchSessionSignature.value === signature) {
+      return false
+    }
+
+    searchResults.value = []
+    isSearching.value = false
+    searchSessionSignature.value = signature
+    searchLastIndex.value = -1
+    searchHasMore.value = true
+    searchInitialized.value = true
+    searchScrollTop.value = 0
+    return true
+  }
+
+  function appendSearchResults(books: SearchBook[]) {
+    const seen = new Set(searchResults.value.map(searchResultKey))
+    const next = searchResults.value.slice()
+    for (const book of books) {
+      const key = searchResultKey(book)
+      if (!seen.has(key)) {
+        seen.add(key)
+        next.push(book)
+      }
+    }
+    searchResults.value = next
+  }
+
+  function completeSearchPage(lastIndex: number, hasMore: boolean) {
+    searchLastIndex.value = Math.max(searchLastIndex.value, lastIndex)
+    searchHasMore.value = hasMore
+    isSearching.value = false
+  }
+
+  function canLoadMoreSearch() {
+    return searchInitialized.value
+      && searchHasMore.value
+      && !isSearching.value
+      && searchSessionSignature.value === currentSearchSignature()
+  }
+
+  function saveSearchScroll(scrollTop: number) {
+    searchScrollTop.value = Math.max(0, scrollTop)
+  }
+
   function clearSearch() {
     searchResults.value = []
     searchKey.value = ''
@@ -178,6 +252,11 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     searchScope.value = 'source'
     searchGroup.value = ''
     searchSourceUrl.value = ''
+    searchSessionSignature.value = ''
+    searchLastIndex.value = -1
+    searchHasMore.value = true
+    searchInitialized.value = false
+    searchScrollTop.value = 0
   }
 
   const isSearchMode = computed(() => searchKey.value.length > 0)
@@ -278,7 +357,10 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     groups, activeGroupId, displayGroups, filteredBooks,
     fetchGroups, saveGroup, removeGroup,
     searchResults, isSearching, searchKey,
-    searchScope, searchGroup, searchSourceUrl, startSearch, clearSearch, isSearchMode,
+    searchScope, searchGroup, searchSourceUrl, searchSessionSignature,
+    searchLastIndex, searchHasMore, searchInitialized, searchScrollTop,
+    startSearch, prepareSearchSession, appendSearchResults, completeSearchPage,
+    canLoadMoreSearch, saveSearchScroll, clearSearch, isSearchMode,
     editMode,
     selectedBookUrls, toggleSelection, selectAll, clearSelection,
     bulkDelete, bulkSetGroup, reorderBooks, moveBookToFront,

@@ -45,6 +45,62 @@ describe('bookshelf search state', () => {
     expect(store.searchGroup).toBe('')
   })
 
+  it('reuses an initialized session with the same search signature', () => {
+    const store = useBookshelfStore()
+    store.startSearch('三体', { scope: 'all' })
+
+    expect(store.prepareSearchSession()).toBe(true)
+    store.completeSearchPage(47, true)
+
+    expect(store.prepareSearchSession()).toBe(false)
+    expect(store.searchLastIndex).toBe(47)
+    expect(store.searchHasMore).toBe(true)
+  })
+
+  it('resets pagination when the search signature changes', () => {
+    const store = useBookshelfStore()
+    store.startSearch('三体', { scope: 'all' })
+    store.prepareSearchSession()
+    store.completeSearchPage(47, true)
+
+    store.startSearch('球状闪电', { scope: 'all' })
+
+    expect(store.prepareSearchSession()).toBe(true)
+    expect(store.searchResults).toEqual([])
+    expect(store.searchLastIndex).toBe(-1)
+    expect(store.searchScrollTop).toBe(0)
+  })
+
+  it('deduplicates normalized title and author across pages', () => {
+    const store = useBookshelfStore()
+
+    store.appendSearchResults([
+      { name: '三 体', author: '作者：刘慈欣', origin: 'one', bookUrl: 'one/1' },
+    ])
+    store.appendSearchResults([
+      { name: '《三体》', author: '刘慈欣', origin: 'two', bookUrl: 'two/1' },
+      { name: '三体全集', author: '刘慈欣', origin: 'two', bookUrl: 'two/2' },
+    ])
+
+    expect(store.searchResults.map((book) => book.name)).toEqual(['三 体', '三体全集'])
+  })
+
+  it('guards load more and preserves the saved scroll position', () => {
+    const store = useBookshelfStore()
+    store.startSearch('三体', { scope: 'all' })
+
+    expect(store.canLoadMoreSearch()).toBe(false)
+    store.prepareSearchSession()
+    store.completeSearchPage(23, true)
+    store.saveSearchScroll(960)
+
+    expect(store.canLoadMoreSearch()).toBe(true)
+    expect(store.searchScrollTop).toBe(960)
+    store.isSearching = true
+    expect(store.canLoadMoreSearch()).toBe(false)
+    store.saveSearchScroll(-50)
+    expect(store.searchScrollTop).toBe(0)
+  })
 
   it('does not display browser cache counts for uploaded local txt books', async () => {
     vi.mocked(getBookshelfWithCacheInfo).mockResolvedValue([
