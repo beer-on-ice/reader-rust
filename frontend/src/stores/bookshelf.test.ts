@@ -141,6 +141,20 @@ describe('bookshelf search state', () => {
     expect(store.searchResults).toEqual([])
   })
 
+  it('rejects search events before a session is initialized', () => {
+    const store = useBookshelfStore()
+    store.isSearching = true
+
+    expect(store.appendSearchResults([
+      { name: '三体', author: '刘慈欣', origin: 'one', bookUrl: 'one/1' },
+    ], store.searchSessionId)).toBe(0)
+    expect(store.completeSearchPage(0, false, store.searchSessionId)).toBe(false)
+    expect(store.searchResults).toEqual([])
+    expect(store.searchLastIndex).toBe(-1)
+    expect(store.searchHasMore).toBe(true)
+    expect(store.isSearching).toBe(true)
+  })
+
   it('does not display browser cache counts for uploaded local txt books', async () => {
     vi.mocked(getBookshelfWithCacheInfo).mockResolvedValue([
       {
