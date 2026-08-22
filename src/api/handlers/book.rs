@@ -1932,7 +1932,10 @@ pub async fn search_book_multi_sse(
             }
         };
 
-        let mut idx = usize::try_from(last_index.saturating_add(1)).unwrap_or(0);
+        let mut idx = usize::try_from(last_index.saturating_add(1))
+            .unwrap_or(0)
+            .min(sources.len());
+        let (committed_last_index, _) = search_sse_progress(idx, sources.len());
         let mut result_map = std::collections::HashSet::<String>::new();
         let mut total = 0usize;
         let mut tasks: FuturesUnordered<_> = FuturesUnordered::new();
@@ -1956,13 +1959,13 @@ pub async fn search_book_multi_sse(
 
             if let Some(res) = tasks.next().await {
                 match res {
-                    Ok((cur_idx, _source_name, Ok(list))) => {
+                    Ok((_cur_idx, _source_name, Ok(list))) => {
                         let remaining = search_size.saturating_sub(total);
                         let batch = take_search_sse_batch(list, &mut result_map, remaining);
                         if !batch.is_empty() {
                             total += batch.len();
-                            let payload = serde_json::json!({"lastIndex": cur_idx, "data": batch});
-                            let _ = tx.send(Event::default().data(payload.to_string())).await;
+                            let payload = json_search_data(committed_last_index, batch);
+                            let _ = tx.send(Event::default().data(payload)).await;
                         }
                         // Stop adding new tasks when search_size is reached
                         if total >= search_size {
@@ -2645,6 +2648,10 @@ fn json_search_end(last_index: i32, has_more: bool) -> String {
     serde_json::json!({"lastIndex": last_index, "hasMore": has_more}).to_string()
 }
 
+fn json_search_data(last_index: i32, books: Vec<SearchBook>) -> String {
+    serde_json::json!({"lastIndex": last_index, "data": books}).to_string()
+}
+
 fn json_msg(msg: &str) -> String {
     serde_json::json!({"msg": msg}).to_string()
 }
@@ -3041,7 +3048,7 @@ fn take_available_source_sse_matches(
 mod tests {
     use super::{
         book_matches_delete_target, build_available_book_source_response,
-        cache_count_for_shelf_display, fallback_available_book, json_search_end,
+        cache_count_for_shelf_display, fallback_available_book, json_search_data, json_search_end,
         local_book_limit_exceeded, merge_search_results, search_sse_progress,
         should_use_available_source_cache, take_available_source_cached_matches,
         take_available_source_sse_matches, take_search_sse_batch, GetAvailableBookSourceRequest,
@@ -3129,6 +3136,21 @@ mod tests {
 
         assert_eq!(value["lastIndex"], 47);
         assert_eq!(value["hasMore"], true);
+    }
+
+    #[test]
+    fn search_sse_data_payload_keeps_the_last_committed_cursor() {
+        let value: serde_json::Value = serde_json::from_str(&json_search_data(
+            7,
+            vec![SearchBook {
+                name: "三体".into(),
+                ..Default::default()
+            }],
+        ))
+        .expect("valid search data JSON");
+
+        assert_eq!(value["lastIndex"], 7);
+        assert_eq!(value["data"][0]["name"], "三体");
     }
 
     #[test]
