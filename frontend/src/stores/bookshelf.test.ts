@@ -50,7 +50,7 @@ describe('bookshelf search state', () => {
     store.startSearch('三体', { scope: 'all' })
 
     expect(store.prepareSearchSession()).toBe(true)
-    store.completeSearchPage(47, true)
+    store.completeSearchPage(47, true, store.searchSessionId)
 
     expect(store.prepareSearchSession()).toBe(false)
     expect(store.searchLastIndex).toBe(47)
@@ -61,7 +61,7 @@ describe('bookshelf search state', () => {
     const store = useBookshelfStore()
     store.startSearch('三体', { scope: 'all' })
     store.prepareSearchSession()
-    store.completeSearchPage(47, true)
+    store.completeSearchPage(47, true, store.searchSessionId)
 
     store.startSearch('球状闪电', { scope: 'all' })
 
@@ -73,14 +73,17 @@ describe('bookshelf search state', () => {
 
   it('deduplicates normalized title and author across pages', () => {
     const store = useBookshelfStore()
+    store.startSearch('三体', { scope: 'all' })
+    store.prepareSearchSession()
+    const sessionId = store.searchSessionId
 
     store.appendSearchResults([
       { name: '三 体', author: '作者：刘慈欣', origin: 'one', bookUrl: 'one/1' },
-    ])
+    ], sessionId)
     store.appendSearchResults([
       { name: '《三体》', author: '刘慈欣', origin: 'two', bookUrl: 'two/1' },
       { name: '三体全集', author: '刘慈欣', origin: 'two', bookUrl: 'two/2' },
-    ])
+    ], sessionId)
 
     expect(store.searchResults.map((book) => book.name)).toEqual(['三 体', '三体全集'])
   })
@@ -91,7 +94,7 @@ describe('bookshelf search state', () => {
 
     expect(store.canLoadMoreSearch()).toBe(false)
     store.prepareSearchSession()
-    store.completeSearchPage(23, true)
+    store.completeSearchPage(23, true, store.searchSessionId)
     store.saveSearchScroll(960)
 
     expect(store.canLoadMoreSearch()).toBe(true)
@@ -125,7 +128,9 @@ describe('bookshelf search state', () => {
     store.startSearch('三体', { scope: 'all' })
     store.prepareSearchSession()
 
+    store.isSearching = true
     expect(store.completeSearchPage(Number.NaN, 'no' as never, store.searchSessionId)).toBe(false)
+    expect(store.isSearching).toBe(true)
     expect(store.searchLastIndex).toBe(-1)
     expect(store.searchHasMore).toBe(true)
     store.saveSearchScroll(Number.NaN)

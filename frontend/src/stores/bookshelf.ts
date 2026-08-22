@@ -226,7 +226,7 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     return true
   }
 
-  function appendSearchResults(books: unknown, sessionId = searchSessionId.value) {
+  function appendSearchResults(books: unknown, sessionId: number) {
     if (sessionId !== searchSessionId.value || !Array.isArray(books)) return 0
     const seen = new Set(searchResults.value.map(searchResultKey))
     const next = searchResults.value.slice()
@@ -247,15 +247,15 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
   function completeSearchPage(
     lastIndex: unknown,
     hasMore: unknown,
-    sessionId = searchSessionId.value,
+    sessionId: number,
   ) {
     if (sessionId !== searchSessionId.value) return false
-    isSearching.value = false
     if (typeof lastIndex !== 'number' || !Number.isFinite(lastIndex)) return false
     if (typeof hasMore !== 'boolean') return false
     const normalizedLastIndex = Math.max(-1, Math.trunc(lastIndex))
     searchLastIndex.value = Math.max(searchLastIndex.value, normalizedLastIndex)
     searchHasMore.value = hasMore
+    isSearching.value = false
     return true
   }
 
