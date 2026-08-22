@@ -1835,7 +1835,7 @@ pub async fn search_book_multi_sse(
         .await
         .map_err(|_| AppError::BadRequest("NEED_LOGIN".to_string()))?;
     let key = q.key.unwrap_or_default();
-    let last_index = q.last_index.unwrap_or(-1);
+    let last_index = normalize_search_last_index(q.last_index);
     let search_size = q
         .search_size
         .unwrap_or(MAX_SEARCH_RESULTS as i32)
@@ -2644,6 +2644,10 @@ fn search_sse_progress(next_unstarted: usize, source_count: usize) -> (i32, bool
     (last_index, next_unstarted < source_count)
 }
 
+fn normalize_search_last_index(last_index: Option<i32>) -> i32 {
+    last_index.unwrap_or(-1).max(-1)
+}
+
 fn json_search_end(last_index: i32, has_more: bool) -> String {
     serde_json::json!({"lastIndex": last_index, "hasMore": has_more}).to_string()
 }
@@ -3049,9 +3053,10 @@ mod tests {
     use super::{
         book_matches_delete_target, build_available_book_source_response,
         cache_count_for_shelf_display, fallback_available_book, json_search_data, json_search_end,
-        local_book_limit_exceeded, merge_search_results, search_sse_progress,
-        should_use_available_source_cache, take_available_source_cached_matches,
-        take_available_source_sse_matches, take_search_sse_batch, GetAvailableBookSourceRequest,
+        local_book_limit_exceeded, merge_search_results, normalize_search_last_index,
+        search_sse_progress, should_use_available_source_cache,
+        take_available_source_cached_matches, take_available_source_sse_matches,
+        take_search_sse_batch, GetAvailableBookSourceRequest,
     };
     use crate::model::{book::Book, search::SearchBook};
     use std::collections::HashSet;
@@ -3127,6 +3132,13 @@ mod tests {
         assert_eq!(search_sse_progress(100, 100), (99, false));
         assert_eq!(search_sse_progress(0, 100), (-1, true));
         assert_eq!(search_sse_progress(0, 0), (-1, false));
+    }
+
+    #[test]
+    fn search_sse_request_cursor_never_starts_before_minus_one() {
+        assert_eq!(normalize_search_last_index(None), -1);
+        assert_eq!(normalize_search_last_index(Some(-99)), -1);
+        assert_eq!(normalize_search_last_index(Some(47)), 47);
     }
 
     #[test]
