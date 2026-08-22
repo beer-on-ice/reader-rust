@@ -42,4 +42,13 @@ describe('multi-source search SSE URL', () => {
     expect(url.searchParams.get('accessToken')).toBe('token-123')
     expect(url.searchParams.get('secureKey')).toBe('secure-456')
   })
+
+  it('preserves an explicit zero resume cursor', () => {
+    const url = new URL(
+      buildSearchBookMultiSSEUrl({ key: '三体', lastIndex: 0 }, emptyStorage),
+      'http://reader.test',
+    )
+
+    expect(url.searchParams.get('lastIndex')).toBe('0')
+  })
 })
