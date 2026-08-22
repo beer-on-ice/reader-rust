@@ -97,7 +97,7 @@ import { useReaderStore } from '../stores/reader'
 import { useAppStore } from '../stores/app'
 import { useSourceStore } from '../stores/source'
 import { searchBookMultiSSE } from '../api/search'
-import { isNearSearchBottom } from '../utils/searchScroll'
+import { clampSearchScrollTop, isNearSearchBottom } from '../utils/searchScroll'
 import { saveBook } from '../api/bookshelf'
 import BookGrid from './BookGrid.vue'
 import BookDetailModal from './BookDetailModal.vue'
@@ -124,6 +124,7 @@ const {
 
 let eventSource: EventSource | null = null
 let requestGeneration = 0
+let restoreFrameId: number | null = null
 const searchResultsRef = ref<HTMLDivElement | null>(null)
 const restoringScroll = ref(false)
 const showBookDetail = ref(false)
@@ -314,14 +315,46 @@ function restoreSearchScroll() {
   if (!container || savedScrollTop <= 0) return
 
   restoringScroll.value = true
-  window.requestAnimationFrame(() => {
-    if (searchResultsRef.value) {
-      searchResultsRef.value.scrollTop = savedScrollTop
-    }
-    window.requestAnimationFrame(() => {
-      restoringScroll.value = false
+  let attempts = 0
+
+  const applySavedPosition = () => {
+    restoreFrameId = window.requestAnimationFrame(() => {
+      restoreFrameId = null
+      const current = searchResultsRef.value
+      if (!current) {
+        restoringScroll.value = false
+        return
+      }
+
+      const maxScrollTop = Math.max(0, current.scrollHeight - current.clientHeight)
+      current.scrollTop = clampSearchScrollTop(
+        savedScrollTop,
+        current.clientHeight,
+        current.scrollHeight,
+      )
+      attempts += 1
+
+      if (savedScrollTop > maxScrollTop && attempts < 8) {
+        applySavedPosition()
+        return
+      }
+
+      restoreFrameId = window.requestAnimationFrame(() => {
+        restoreFrameId = null
+        restoringScroll.value = false
+      })
     })
-  })
+  }
+
+  applySavedPosition()
+}
+
+function cancelScrollRestore() {
+  if (restoreFrameId !== null) {
+    window.cancelAnimationFrame(restoreFrameId)
+    restoreFrameId = null
+  }
+  restoringScroll.value = false
 }
 
 function handleSearchScroll() {
@@ -359,7 +392,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  saveCurrentScroll()
+  if (!restoringScroll.value) saveCurrentScroll()
+  cancelScrollRestore()
   closeEventSource()
   shelfStore.isSearching = false
 })
@@ -370,7 +404,7 @@ async function handleBookClick(book: Book | SearchBook) {
     saveCurrentScroll()
     await readerStore.loadBook(b)
     await readerStore.loadChapter(b.durChapterIndex || 0)
-    router.push('/reader')
+    await router.push('/reader')
   }
 }
 
