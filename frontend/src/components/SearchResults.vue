@@ -1,5 +1,9 @@
 <template>
-  <div class="search-results">
+  <div
+    ref="searchResultsRef"
+    class="search-results"
+    @scroll.passive="handleSearchScroll"
+  >
     <div class="search-header">
       <h2>
         搜索 "{{ searchKey }}"
@@ -72,6 +76,12 @@
       @addToShelf="handleAddToShelf"
     />
 
+    <div v-if="displayResults.length > 0" class="search-pagination-status">
+      <span v-if="isSearching">继续搜索书源中...</span>
+      <span v-else-if="searchInitialized && !searchHasMore">已搜索全部选定书源</span>
+      <span v-else-if="searchInitialized && searchHasMore">下滑继续搜索更多书源</span>
+    </div>
+
     <BookDetailModal
       v-model="showBookDetail"
       :book="selectedBook"
@@ -80,13 +90,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useBookshelfStore } from '../stores/bookshelf'
 import { useReaderStore } from '../stores/reader'
 import { useAppStore } from '../stores/app'
 import { useSourceStore } from '../stores/source'
 import { searchBookMultiSSE } from '../api/search'
+import { isNearSearchBottom } from '../utils/searchScroll'
 import { saveBook } from '../api/bookshelf'
 import BookGrid from './BookGrid.vue'
 import BookDetailModal from './BookDetailModal.vue'
@@ -107,9 +118,14 @@ const {
   searchScope,
   searchGroup: selectedGroup,
   searchSourceUrl: selectedSourceUrl,
+  searchHasMore,
+  searchInitialized,
 } = storeToRefs(shelfStore)
 
 let eventSource: EventSource | null = null
+let requestGeneration = 0
+const searchResultsRef = ref<HTMLDivElement | null>(null)
+const restoringScroll = ref(false)
 const showBookDetail = ref(false)
 const selectedBook = ref<Book | SearchBook | null>(null)
 
@@ -153,10 +169,10 @@ const displayResults = computed<SearchBook[]>(() => {
 })
 
 function closeEventSource() {
-  if (eventSource) {
-    eventSource.close()
-    eventSource = null
-  }
+  requestGeneration += 1
+  const source = eventSource
+  eventSource = null
+  source?.close()
 }
 
 function ensureSearchSelection() {
@@ -174,67 +190,155 @@ function ensureSearchSelection() {
   }
 }
 
-function doSearch(key: string) {
-  closeEventSource()
+function hasValidSearchSelection() {
+  if (searchScope.value === 'group') return Boolean(selectedGroup.value)
+  if (searchScope.value === 'source') return Boolean(selectedSourceUrl.value)
+  return true
+}
 
-  if (searchScope.value === 'group' && !selectedGroup.value) {
-    shelfStore.searchResults = []
-    shelfStore.isSearching = false
-    return
-  }
+function openSearch(mode: 'initial' | 'loadMore') {
+  if (!searchKey.value || eventSource || isSearching.value) return
+  if (!hasValidSearchSelection()) return
+  if (mode === 'loadMore' && !shelfStore.canLoadMoreSearch()) return
 
-  if (searchScope.value === 'source' && !selectedSourceUrl.value) {
-    shelfStore.searchResults = []
-    shelfStore.isSearching = false
-    return
-  }
-
-  shelfStore.searchResults = []
+  const sessionId = shelfStore.searchSessionId
+  const generation = ++requestGeneration
   shelfStore.isSearching = true
 
-  eventSource = searchBookMultiSSE({
-    key,
-    concurrentCount: 24,
-    bookSourceGroup: searchScope.value === 'group' ? selectedGroup.value : undefined,
-    bookSourceUrl: searchScope.value === 'source' ? selectedSourceUrl.value : undefined,
-  })
-
-  eventSource.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data)
-      if (data.data && Array.isArray(data.data)) {
-        const existing = new Set(shelfStore.searchResults.map((r) => `${r.origin}::${r.bookUrl}`))
-        const newBooks = data.data.filter((b: SearchBook) => !existing.has(`${b.origin}::${b.bookUrl}`))
-        shelfStore.searchResults = [...shelfStore.searchResults, ...newBooks]
-      }
-    } catch { /* skip */ }
+  let source: EventSource
+  try {
+    source = searchBookMultiSSE({
+      key: searchKey.value,
+      concurrentCount: 24,
+      lastIndex: mode === 'loadMore' ? shelfStore.searchLastIndex : -1,
+      bookSourceGroup: searchScope.value === 'group' ? selectedGroup.value : undefined,
+      bookSourceUrl: searchScope.value === 'source' ? selectedSourceUrl.value : undefined,
+    })
+  } catch {
+    if (sessionId === shelfStore.searchSessionId) {
+      shelfStore.isSearching = false
+    }
+    return
   }
 
-  eventSource.addEventListener('end', () => {
-    shelfStore.isSearching = false
-    closeEventSource()
+  eventSource = source
+  let settled = false
+
+  function isCurrentRequest() {
+    return generation === requestGeneration
+      && sessionId === shelfStore.searchSessionId
+      && eventSource === source
+  }
+
+  function finishSource() {
+    source.close()
+    if (eventSource === source) {
+      eventSource = null
+    }
+  }
+
+  function failRequest() {
+    if (settled) return
+    settled = true
+    if (isCurrentRequest()) {
+      shelfStore.isSearching = false
+    }
+    finishSource()
+  }
+
+  source.onmessage = (event) => {
+    if (!isCurrentRequest()) return
+    try {
+      const payload: unknown = JSON.parse(event.data)
+      if (payload && typeof payload === 'object' && 'data' in payload) {
+        shelfStore.appendSearchResults(
+          (payload as { data: unknown }).data,
+          sessionId,
+        )
+      }
+    } catch { /* Ignore malformed data events and keep the page request alive. */ }
+  }
+
+  source.addEventListener('end', (event) => {
+    if (settled || !isCurrentRequest()) return
+    settled = true
+    let completed = false
+    try {
+      const payload: unknown = JSON.parse((event as MessageEvent<string>).data)
+      if (payload && typeof payload === 'object') {
+        const end = payload as { lastIndex?: unknown; hasMore?: unknown }
+        completed = shelfStore.completeSearchPage(end.lastIndex, end.hasMore, sessionId)
+      }
+    } catch { /* Fall through and release loading without advancing the cursor. */ }
+    if (!completed && sessionId === shelfStore.searchSessionId) {
+      shelfStore.isSearching = false
+    }
+    finishSource()
   })
 
-  eventSource.addEventListener('error', () => {
-    shelfStore.isSearching = false
-    closeEventSource()
-  })
+  source.onerror = failRequest
+}
 
-  eventSource.onerror = () => {
-    shelfStore.isSearching = false
+function syncSearchSession() {
+  ensureSearchSelection()
+  if (!searchKey.value) {
     closeEventSource()
+    shelfStore.isSearching = false
+    return
+  }
+
+  const shouldStart = shelfStore.prepareSearchSession()
+  if (!hasValidSearchSelection()) {
+    if (shouldStart) shelfStore.searchHasMore = false
+    closeEventSource()
+    shelfStore.isSearching = false
+    return
+  }
+
+  if (shouldStart) {
+    closeEventSource()
+    shelfStore.isSearching = false
+    openSearch('initial')
+  }
+}
+
+function saveCurrentScroll() {
+  if (shelfStore.searchInitialized && searchResultsRef.value) {
+    shelfStore.saveSearchScroll(searchResultsRef.value.scrollTop)
+  }
+}
+
+function restoreSearchScroll() {
+  const container = searchResultsRef.value
+  const savedScrollTop = shelfStore.searchScrollTop
+  if (!container || savedScrollTop <= 0) return
+
+  restoringScroll.value = true
+  window.requestAnimationFrame(() => {
+    if (searchResultsRef.value) {
+      searchResultsRef.value.scrollTop = savedScrollTop
+    }
+    window.requestAnimationFrame(() => {
+      restoringScroll.value = false
+    })
+  })
+}
+
+function handleSearchScroll() {
+  const container = searchResultsRef.value
+  if (!container || restoringScroll.value || !shelfStore.canLoadMoreSearch()) return
+  if (isNearSearchBottom(container.scrollTop, container.clientHeight, container.scrollHeight)) {
+    openSearch('loadMore')
   }
 }
 
 watch(
   [() => shelfStore.searchKey, searchScope, selectedGroup, selectedSourceUrl],
   ([key]) => {
-    ensureSearchSelection()
     if (key) {
-      doSearch(key)
+      syncSearchSession()
     } else {
       closeEventSource()
-      shelfStore.searchResults = []
       shelfStore.isSearching = false
     }
   },
@@ -250,15 +354,20 @@ onMounted(async () => {
     await sourceStore.fetchSources().catch(() => undefined)
   }
   ensureSearchSelection()
+  await nextTick()
+  restoreSearchScroll()
 })
 
 onUnmounted(() => {
+  saveCurrentScroll()
   closeEventSource()
+  shelfStore.isSearching = false
 })
 
 async function handleBookClick(book: Book | SearchBook) {
   const b = book as Book
   if (b.origin && b.bookUrl) {
+    saveCurrentScroll()
     await readerStore.loadBook(b)
     await readerStore.loadChapter(b.durChapterIndex || 0)
     router.push('/reader')
@@ -418,6 +527,14 @@ defineEmits<{
   border: 1px solid var(--color-border);
   background: var(--color-bg-elevated);
   color: var(--color-text);
+  font-size: var(--text-sm);
+}
+
+.search-pagination-status {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-5) 0 var(--space-6);
+  color: var(--color-text-tertiary);
   font-size: var(--text-sm);
 }
 
