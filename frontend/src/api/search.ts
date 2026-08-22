@@ -15,23 +15,36 @@ export function searchBookMulti(params: {
  * SSE-based multi-source search. Returns an EventSource.
  * Caller is responsible for closing the connection.
  */
-export function searchBookMultiSSE(params: {
+export interface SearchBookMultiSSEParams {
   key: string
   bookSourceGroup?: string
   bookSourceUrl?: string
   concurrentCount?: number
   searchSize?: number
-}) {
+  lastIndex?: number
+}
+
+type StorageLike = Pick<Storage, 'getItem'>
+
+export function buildSearchBookMultiSSEUrl(
+  params: SearchBookMultiSSEParams,
+  storage: StorageLike = localStorage,
+) {
   const query = new URLSearchParams()
   query.set('key', params.key)
+  query.set('lastIndex', String(params.lastIndex ?? -1))
   if (params.bookSourceGroup) query.set('bookSourceGroup', params.bookSourceGroup)
   if (params.bookSourceUrl) query.set('bookSourceUrl', params.bookSourceUrl)
   if (params.concurrentCount) query.set('concurrentCount', String(params.concurrentCount))
   if (params.searchSize) query.set('searchSize', String(params.searchSize))
 
-  appendAuthQueryParams(query)
+  appendAuthQueryParams(query, storage)
 
-  return new EventSource(`/reader3/searchBookMultiSSE?${query.toString()}`)
+  return `/reader3/searchBookMultiSSE?${query.toString()}`
+}
+
+export function searchBookMultiSSE(params: SearchBookMultiSSEParams) {
+  return new EventSource(buildSearchBookMultiSSEUrl(params))
 }
 
 export function exploreBook(params: {
