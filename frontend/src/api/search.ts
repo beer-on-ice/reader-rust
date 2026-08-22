@@ -35,8 +35,12 @@ export function buildSearchBookMultiSSEUrl(
   query.set('lastIndex', String(params.lastIndex ?? -1))
   if (params.bookSourceGroup) query.set('bookSourceGroup', params.bookSourceGroup)
   if (params.bookSourceUrl) query.set('bookSourceUrl', params.bookSourceUrl)
-  if (params.concurrentCount) query.set('concurrentCount', String(params.concurrentCount))
-  if (params.searchSize) query.set('searchSize', String(params.searchSize))
+  if (typeof params.concurrentCount !== 'undefined') {
+    query.set('concurrentCount', String(params.concurrentCount))
+  }
+  if (typeof params.searchSize !== 'undefined') {
+    query.set('searchSize', String(params.searchSize))
+  }
 
   appendAuthQueryParams(query, storage)
 

@@ -45,10 +45,17 @@ describe('multi-source search SSE URL', () => {
 
   it('preserves an explicit zero resume cursor', () => {
     const url = new URL(
-      buildSearchBookMultiSSEUrl({ key: '三体', lastIndex: 0 }, emptyStorage),
+      buildSearchBookMultiSSEUrl({
+        key: '三体',
+        lastIndex: 0,
+        concurrentCount: 0,
+        searchSize: 0,
+      }, emptyStorage),
       'http://reader.test',
     )
 
     expect(url.searchParams.get('lastIndex')).toBe('0')
+    expect(url.searchParams.get('concurrentCount')).toBe('0')
+    expect(url.searchParams.get('searchSize')).toBe('0')
   })
 })
