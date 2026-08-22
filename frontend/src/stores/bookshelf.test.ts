@@ -45,6 +45,115 @@ describe('bookshelf search state', () => {
     expect(store.searchGroup).toBe('')
   })
 
+  it('reuses an initialized session with the same search signature', () => {
+    const store = useBookshelfStore()
+    store.startSearch('三体', { scope: 'all' })
+
+    expect(store.prepareSearchSession()).toBe(true)
+    store.completeSearchPage(47, true, store.searchSessionId)
+
+    expect(store.prepareSearchSession()).toBe(false)
+    expect(store.searchLastIndex).toBe(47)
+    expect(store.searchHasMore).toBe(true)
+  })
+
+  it('resets pagination when the search signature changes', () => {
+    const store = useBookshelfStore()
+    store.startSearch('三体', { scope: 'all' })
+    store.prepareSearchSession()
+    store.completeSearchPage(47, true, store.searchSessionId)
+
+    store.startSearch('球状闪电', { scope: 'all' })
+
+    expect(store.prepareSearchSession()).toBe(true)
+    expect(store.searchResults).toEqual([])
+    expect(store.searchLastIndex).toBe(-1)
+    expect(store.searchScrollTop).toBe(0)
+  })
+
+  it('deduplicates normalized title and author across pages', () => {
+    const store = useBookshelfStore()
+    store.startSearch('三体', { scope: 'all' })
+    store.prepareSearchSession()
+    const sessionId = store.searchSessionId
+
+    store.appendSearchResults([
+      { name: '三 体', author: '作者：刘慈欣', origin: 'one', bookUrl: 'one/1' },
+    ], sessionId)
+    store.appendSearchResults([
+      { name: '《三体》', author: '刘慈欣', origin: 'two', bookUrl: 'two/1' },
+      { name: '三体全集', author: '刘慈欣', origin: 'two', bookUrl: 'two/2' },
+    ], sessionId)
+
+    expect(store.searchResults.map((book) => book.name)).toEqual(['三 体', '三体全集'])
+  })
+
+  it('guards load more and preserves the saved scroll position', () => {
+    const store = useBookshelfStore()
+    store.startSearch('三体', { scope: 'all' })
+
+    expect(store.canLoadMoreSearch()).toBe(false)
+    store.prepareSearchSession()
+    store.completeSearchPage(23, true, store.searchSessionId)
+    store.saveSearchScroll(960)
+
+    expect(store.canLoadMoreSearch()).toBe(true)
+    expect(store.searchScrollTop).toBe(960)
+    store.isSearching = true
+    expect(store.canLoadMoreSearch()).toBe(false)
+    store.saveSearchScroll(-50)
+    expect(store.searchScrollTop).toBe(0)
+  })
+
+  it('ignores results and completion from an older search session', () => {
+    const store = useBookshelfStore()
+    store.startSearch('三体', { scope: 'all' })
+    store.prepareSearchSession()
+    const oldSessionId = store.searchSessionId
+
+    store.startSearch('球状闪电', { scope: 'all' })
+    store.prepareSearchSession()
+
+    expect(store.appendSearchResults([
+      { name: '三体', author: '刘慈欣', origin: 'one', bookUrl: 'one/1' },
+    ], oldSessionId)).toBe(0)
+    expect(store.completeSearchPage(47, false, oldSessionId)).toBe(false)
+    expect(store.searchResults).toEqual([])
+    expect(store.searchLastIndex).toBe(-1)
+    expect(store.searchHasMore).toBe(true)
+  })
+
+  it('rejects malformed runtime pagination values', () => {
+    const store = useBookshelfStore()
+    store.startSearch('三体', { scope: 'all' })
+    store.prepareSearchSession()
+
+    store.isSearching = true
+    expect(store.completeSearchPage(Number.NaN, 'no' as never, store.searchSessionId)).toBe(false)
+    expect(store.isSearching).toBe(true)
+    expect(store.searchLastIndex).toBe(-1)
+    expect(store.searchHasMore).toBe(true)
+    store.saveSearchScroll(Number.NaN)
+    expect(store.searchScrollTop).toBe(0)
+    expect(store.appendSearchResults([
+      { name: null, author: '刘慈欣' } as never,
+    ], store.searchSessionId)).toBe(0)
+    expect(store.searchResults).toEqual([])
+  })
+
+  it('rejects search events before a session is initialized', () => {
+    const store = useBookshelfStore()
+    store.isSearching = true
+
+    expect(store.appendSearchResults([
+      { name: '三体', author: '刘慈欣', origin: 'one', bookUrl: 'one/1' },
+    ], store.searchSessionId)).toBe(0)
+    expect(store.completeSearchPage(0, false, store.searchSessionId)).toBe(false)
+    expect(store.searchResults).toEqual([])
+    expect(store.searchLastIndex).toBe(-1)
+    expect(store.searchHasMore).toBe(true)
+    expect(store.isSearching).toBe(true)
+  })
 
   it('does not display browser cache counts for uploaded local txt books', async () => {
     vi.mocked(getBookshelfWithCacheInfo).mockResolvedValue([

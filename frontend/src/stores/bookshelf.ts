@@ -15,6 +15,29 @@ import { deleteBrowserBookCache, listBrowserCacheSummary } from '../utils/browse
 import { isLocalBook } from '../utils/localBook'
 import { clearRecentReadBooks, getRecentReadBookKey, loadRecentReadBooks, removeRecentReadBook } from '../utils/recentBooks'
 
+const SEARCH_SEPARATORS = new Set('《》〈〉「」『』()（）[]【】·-—_:：,，.。!！?？;；\'"“”‘’/\\|')
+
+function normalizeSearchText(value: string) {
+  return Array.from(value.toLowerCase())
+    .filter((char) => !/\s/u.test(char) && !SEARCH_SEPARATORS.has(char))
+    .join('')
+}
+
+function searchResultKey(book: SearchBook) {
+  const title = normalizeSearchText(book.name)
+  const author = normalizeSearchText(book.author).replace(/^作者/, '')
+  return `${title}\u0000${author}`
+}
+
+function isSearchBook(value: unknown): value is SearchBook {
+  if (!value || typeof value !== 'object') return false
+  const book = value as Record<string, unknown>
+  return typeof book.name === 'string'
+    && typeof book.author === 'string'
+    && typeof book.bookUrl === 'string'
+    && typeof book.origin === 'string'
+}
+
 export const useBookshelfStore = defineStore('bookshelf', () => {
   // ─── Bookshelf ───
   const books = ref<Book[]>([])
@@ -153,6 +176,21 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
   const searchScope = ref<'all' | 'group' | 'source'>('source')
   const searchGroup = ref('')
   const searchSourceUrl = ref('')
+  const searchSessionSignature = ref('')
+  const searchLastIndex = ref(-1)
+  const searchHasMore = ref(true)
+  const searchInitialized = ref(false)
+  const searchScrollTop = ref(0)
+  const searchSessionId = ref(0)
+
+  function currentSearchSignature() {
+    return JSON.stringify([
+      searchKey.value.trim(),
+      searchScope.value,
+      searchScope.value === 'group' ? searchGroup.value : '',
+      searchScope.value === 'source' ? searchSourceUrl.value : '',
+    ])
+  }
 
   function startSearch(key: string, options: {
     scope?: 'all' | 'group' | 'source'
@@ -171,6 +209,69 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     searchKey.value = nextKey
   }
 
+  function prepareSearchSession() {
+    const signature = currentSearchSignature()
+    if (searchInitialized.value && searchSessionSignature.value === signature) {
+      return false
+    }
+
+    searchResults.value = []
+    isSearching.value = false
+    searchSessionSignature.value = signature
+    searchLastIndex.value = -1
+    searchHasMore.value = true
+    searchInitialized.value = true
+    searchScrollTop.value = 0
+    searchSessionId.value += 1
+    return true
+  }
+
+  function appendSearchResults(books: unknown, sessionId: number) {
+    if (!searchInitialized.value || sessionId !== searchSessionId.value || !Array.isArray(books)) {
+      return 0
+    }
+    const seen = new Set(searchResults.value.map(searchResultKey))
+    const next = searchResults.value.slice()
+    let appended = 0
+    for (const book of books) {
+      if (!isSearchBook(book)) continue
+      const key = searchResultKey(book)
+      if (!seen.has(key)) {
+        seen.add(key)
+        next.push(book)
+        appended += 1
+      }
+    }
+    searchResults.value = next
+    return appended
+  }
+
+  function completeSearchPage(
+    lastIndex: unknown,
+    hasMore: unknown,
+    sessionId: number,
+  ) {
+    if (!searchInitialized.value || sessionId !== searchSessionId.value) return false
+    if (typeof lastIndex !== 'number' || !Number.isFinite(lastIndex)) return false
+    if (typeof hasMore !== 'boolean') return false
+    const normalizedLastIndex = Math.max(-1, Math.trunc(lastIndex))
+    searchLastIndex.value = Math.max(searchLastIndex.value, normalizedLastIndex)
+    searchHasMore.value = hasMore
+    isSearching.value = false
+    return true
+  }
+
+  function canLoadMoreSearch() {
+    return searchInitialized.value
+      && searchHasMore.value
+      && !isSearching.value
+      && searchSessionSignature.value === currentSearchSignature()
+  }
+
+  function saveSearchScroll(scrollTop: number) {
+    searchScrollTop.value = Number.isFinite(scrollTop) ? Math.max(0, scrollTop) : 0
+  }
+
   function clearSearch() {
     searchResults.value = []
     searchKey.value = ''
@@ -178,6 +279,12 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     searchScope.value = 'source'
     searchGroup.value = ''
     searchSourceUrl.value = ''
+    searchSessionSignature.value = ''
+    searchLastIndex.value = -1
+    searchHasMore.value = true
+    searchInitialized.value = false
+    searchScrollTop.value = 0
+    searchSessionId.value += 1
   }
 
   const isSearchMode = computed(() => searchKey.value.length > 0)
@@ -278,7 +385,10 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     groups, activeGroupId, displayGroups, filteredBooks,
     fetchGroups, saveGroup, removeGroup,
     searchResults, isSearching, searchKey,
-    searchScope, searchGroup, searchSourceUrl, startSearch, clearSearch, isSearchMode,
+    searchScope, searchGroup, searchSourceUrl, searchSessionSignature,
+    searchLastIndex, searchHasMore, searchInitialized, searchScrollTop, searchSessionId,
+    startSearch, prepareSearchSession, appendSearchResults, completeSearchPage,
+    canLoadMoreSearch, saveSearchScroll, clearSearch, isSearchMode,
     editMode,
     selectedBookUrls, toggleSelection, selectAll, clearSelection,
     bulkDelete, bulkSetGroup, reorderBooks, moveBookToFront,

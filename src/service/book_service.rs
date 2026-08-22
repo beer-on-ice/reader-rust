@@ -9,6 +9,7 @@ use crate::model::{
     book_chapter::BookChapter,
     book_source::{BookSource, ExploreKind},
     search::SearchBook,
+    search_relevance::{rank_search_results, MAX_SEARCH_RESULTS},
 };
 use crate::parser::js::{eval_js, eval_js_with_bindings, with_js_lib};
 use crate::parser::rule_engine::RuleEngine;
@@ -263,7 +264,8 @@ impl BookService {
         let res = apply_login_check_js(source, res);
         tracing::debug!("fetch success, body length: {}", res.body.len());
         let books = self.parser.search_books(source, &res.body, &res.url);
-        tracing::info!("found {} books", books.len());
+        let books = rank_search_results(key, books, MAX_SEARCH_RESULTS);
+        tracing::info!("found {} relevant books", books.len());
         Ok(books)
     }
 

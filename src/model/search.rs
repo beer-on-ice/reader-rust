@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::search_relevance::{normalize_search_author, normalize_search_text};
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SearchBook {
@@ -21,8 +23,8 @@ pub struct SearchBook {
 impl SearchBook {
     /// Generate a key for merging books with same name and author
     pub fn merge_key(&self) -> String {
-        let name = self.name.trim().to_lowercase();
-        let author = self.author.trim().to_lowercase();
+        let name = normalize_search_text(&self.name);
+        let author = normalize_search_author(&self.author);
         format!("{}|{}", name, author)
     }
 }
